@@ -14,6 +14,10 @@ class Finish extends Phaser.Scene {
     this._scrollY = 0;
     this._scrollMax = 0;
 
+    // reset per-run state (important for RESTART -> play again)
+    this._saved = false;
+    this.disableNameInput();
+
     // input (HTML element, not Phaser DOM)
     this._nameInput = null;
     this._nameInputEnabled = false;
@@ -220,7 +224,13 @@ class Finish extends Phaser.Scene {
     try {
       const top = await this.jsonp(`${this.API_URL}?action=top`);
       if (!Array.isArray(top)) throw new Error('bad response');
-      this._top = top.filter(r => r && (r.name || '').toString().trim() && Number(r.time) > 0);
+      // filter out invalid rows (e.g. 00:00 / empty) to avoid rank shift
+      const clean = top.filter(r => {
+        const t = Number(r && r.time);
+        const name = (r && r.name != null) ? String(r.name).trim() : '';
+        return Number.isFinite(t) && t > 0 && name.length > 0;
+      }).map((r, i) => ({ ...r, rank: i + 1 }));
+      this._top = clean;
       this._status.setText('');
       this.buildTable();
     } catch (e) {
