@@ -1,5 +1,5 @@
 // scenes/Finish.js
-// Finish + Score vienā scenā (TOP50 + vārda ievade tikai TOPā)
+// Finish + Score vienā scenā. Ievade tikai tad, ja Stage1 reason === "success" un TOP50.
 
 class Finish extends Phaser.Scene {
   constructor() {
@@ -7,27 +7,37 @@ class Finish extends Phaser.Scene {
   }
 
   init(data) {
-    this.result = data || {};
-    this._saved = false;
-    this._top = null;
-    this._myRank = null;
+    this.dataIn = data || {};
+    this.reason = (this.dataIn.reason || "").toString();
+    this.elapsedMs = Number(this.dataIn.elapsedMs || 0);
+    this.readyCount = Number(this.dataIn.readyCount || 0);
+    this.totalCount = Number(this.dataIn.totalCount || 0);
 
-    // IMPORTANT: pilnais URL (nekādu "...")
+    // SUCCESS definīcija atbilst Stage1.js
+    this.success = this.reason === "success" && this.readyCount === this.totalCount;
+
+    this.timeSec = Math.max(1, Math.floor(this.elapsedMs / 1000));
+
+    // Backend (pilns URL, bez "...")
     this.API_URL =
       "https://script.google.com/macros/s/AKfycbyh6BcVY_CBPW9v7SNo1bNp_XttvhxpeSdYPfrTdRCD4KWXLeLvv-0S3p96PX0Dv5BnrA/exec";
     this.TOKEN = "FIRE2025";
+
+    // UI state
+    this._top = [];
+    this._saved = false;
+    this._nameInput = null;
+    this._layoutDom = null;
+    this._onKeyDown = null;
   }
 
   create() {
     const W = this.scale.width;
     const H = this.scale.height;
 
-    // fons
     this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.25);
 
-    // header
-    const success = !!this.result.success;
-    const title = success ? "MISIJA IR IZPILDĪTA!" : "MISIJA NAV PABEIGTA!";
+    const title = this.success ? "MISIJA IR IZPILDĪTA!" : "MISIJA NAV PABEIGTA!";
     this.add
       .text(W / 2, 70, title, {
         fontFamily: "Arial",
@@ -37,40 +47,37 @@ class Finish extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    const timeText = this._formatTime(this.result.timeSeconds || this.result.timeSec || 0);
     this.add
-      .text(W / 2, 112, `Tavs laiks: ${timeText}`, {
+      .text(W / 2, 112, `Tavs laiks: ${this._formatTime(this.timeSec)}`, {
         fontFamily: "Arial",
         fontSize: "20px",
         color: "#EAEAEA",
       })
       .setOrigin(0.5);
 
-    // zona saglabāšanai (fiksēta, neskrollējas)
-    this._saveRowY = 155;
-    this._tableTopY = 195;
-
     this._msg = this.add
-      .text(W / 2, this._saveRowY - 28, "", {
+      .text(W / 2, 150, "", {
         fontFamily: "Arial",
         fontSize: "16px",
         color: "#F1F1F1",
       })
       .setOrigin(0.5);
 
-    // tabulas ģeometrija
+    // Tabulas ģeometrija
     this._tableX = Math.round(W * 0.10);
     this._tableW = Math.round(W * 0.80);
-    this._tableH = Math.round(H * 0.58);
     this._rowH = 28;
 
-    // kolonnas (vienkārši un salasāmi)
+    this._tableTopY = 190;
+    this._bodyMaskY = this._tableTopY + 26;
+    this._tableH = Math.round(H * 0.58);
+
     this._colRankX = this._tableX + 10;
     this._colNameX = this._tableX + Math.round(this._tableW * 0.22);
     this._colTimeX = this._tableX + this._tableW - 10;
 
-    // header rinda (fiksēta)
-    this._headerBg = this.add.rectangle(
+    // Header rinda
+    this.add.rectangle(
       this._tableX + this._tableW / 2,
       this._tableTopY,
       this._tableW,
@@ -103,10 +110,7 @@ class Finish extends Phaser.Scene {
       })
       .setOrigin(1, 0.5);
 
-    // scroll body container + maska (maskas grafika NAV redzama)
-    this._bodyY = this._tableTopY + 18;
-    this._bodyMaskY = this._bodyY + 10;
-
+    // Scroll container + maska (maskas grafika NAV redzama)
     this._rowsContainer = this.add.container(0, 0);
 
     this._maskGfx = this.make.graphics({ x: 0, y: 0, add: false });
@@ -114,83 +118,54 @@ class Finish extends Phaser.Scene {
     this._maskGfx.fillRect(this._tableX, this._bodyMaskY, this._tableW, this._tableH);
     const mask = this._maskGfx.createGeometryMask();
     this._rowsContainer.setMask(mask);
-    // lai NEKAD nerādās baltais fons
     this._maskGfx.setVisible(false);
 
     this._scroll = 0;
     this._maxScroll = 0;
 
-    // scroll input (desktop + touch)
-    this.input.on("wheel", (p, dx, dy) => {
-      this._setScroll(this._scroll + dy);
-    });
-
+    this.input.on("wheel", (p, dx, dy) => this._setScroll(this._scroll + dy));
     this.input.on("pointermove", (p) => {
-      if (!p.isDown) return;
-      // velk uz augšu/leju
-      if (p.prevPosition) {
-        const delta = p.position.y - p.prevPosition.y;
-        this._setScroll(this._scroll - delta);
-      }
+      if (!p.isDown || !p.prevPosition) return;
+      const delta = p.position.y - p.prevPosition.y;
+      this._setScroll(this._scroll - delta);
     });
 
-    // pogas apakšā
+    // Bottom buttons
     this._btnRestart = this._button(W * 0.30, H - 72, 200, 54, "RESTART", 0x245b33, () => {
-      // RESTART -> MainMenu (un MainMenu resetos flagus savā init/create)
       this._cleanupDom();
-      this.scene.start("MainMenu");
+      this.scene.start("MainMenu"); // <- salabots: vienmēr MainMenu
     });
 
     this._btnExit = this._button(W * 0.70, H - 72, 200, 54, "IZIET", 0x6a2323, () => {
-      // “izeja” web vidē: mēģinām aizvērt; ja bloķē, vismaz pāriet uz Intro
       this._cleanupDom();
-      try {
-        window.close();
-      } catch (e) {}
+      try { window.close(); } catch (e) {}
       this.scene.start("Intro");
     });
 
-    // ielādē TOP
-    this._loadTop(success);
+    // Load TOP
+    this._loadTop();
   }
 
-  // ---------- TOP LOAD / RENDER ----------
-
-  _loadTop(success) {
-    const url = `${this.API_URL}?action=top`;
-    this._jsonp(url, "cb_top_", (data) => {
+  _loadTop() {
+    this._jsonp(`${this.API_URL}?action=top`, "cb_top_", (data) => {
       if (!Array.isArray(data)) {
         this._msg.setText("Neizdevās ielādēt TOP (pārbaudi deploy).");
         return;
       }
       this._top = data;
-
-      // aprēķinām vai spēlētājs iekļūst topā (ja success)
-      this._myRank = null;
-      if (success) {
-        const myTime = Number(this.result.timeSeconds || this.result.timeSec);
-        if (Number.isFinite(myTime) && myTime > 0) {
-          // rank pēc laika: ja myTime <= pēdējā top laika vai top mazāk par 50
-          // (precīzi pēc backend sortēšanas: mazāks laiks labāks)
-          if (data.length < 50) {
-            this._myRank = data.length + 1; // kandidāts
-          } else {
-            const last = data[data.length - 1];
-            if (myTime <= Number(last.time)) this._myRank = 50; // kandidāts (aptuveni)
-          }
-        }
-      }
-
       this._renderRows();
 
-      // Ja success un potenciāli topā -> ļaujam ievadi
-      if (success && this._isEligibleForSave()) {
-        this._msg.setText(`Tava vieta TOP 50: #${this._estimateRank()} — ievadi vārdu un saglabā`);
-        this._showSaveUI();
-      } else if (success) {
-        this._msg.setText("Tu netiki līdz TOP 50.");
-      } else {
+      if (!this.success) {
         this._msg.setText("");
+        return;
+      }
+
+      if (this._isEligibleForSave()) {
+        const rank = this._estimateRank();
+        this._msg.setText(`Tava vieta TOP 50: #${rank} — ievadi vārdu un saglabā`);
+        this._showSaveUI(rank);
+      } else {
+        this._msg.setText("Tu netiki līdz TOP 50.");
       }
     }, () => {
       this._msg.setText("Neizdevās ielādēt TOP (pārbaudi deploy).");
@@ -198,20 +173,14 @@ class Finish extends Phaser.Scene {
   }
 
   _renderRows() {
-    // notīram vecās rindas
     this._rowsContainer.removeAll(true);
 
-    const rows = Array.isArray(this._top) ? this._top : [];
     const startY = this._bodyMaskY + 6;
+    const rows = this._top || [];
 
     rows.forEach((r, i) => {
       const y = startY + i * this._rowH;
 
-      const rank = r.rank || (i + 1);
-      const name = (r.name ?? "").toString();
-      const t = this._formatTime(r.time);
-
-      // viegla līnija (bez blokiem)
       const line = this.add.rectangle(
         this._tableX + this._tableW / 2,
         y + this._rowH / 2 - 2,
@@ -222,29 +191,27 @@ class Finish extends Phaser.Scene {
       );
       this._rowsContainer.add(line);
 
-      const tr = this.add
-        .text(this._colRankX, y, String(rank), {
-          fontFamily: "Arial",
-          fontSize: "15px",
-          color: "#FFFFFF",
-        })
-        .setOrigin(0, 0);
+      const rank = r.rank || i + 1;
+      const name = (r.name ?? "").toString();
+      const t = this._formatTime(Number(r.time));
 
-      const tn = this.add
-        .text(this._colNameX, y, name, {
-          fontFamily: "Arial",
-          fontSize: "15px",
-          color: "#FFFFFF",
-        })
-        .setOrigin(0, 0);
+      const tr = this.add.text(this._colRankX, y, String(rank), {
+        fontFamily: "Arial",
+        fontSize: "15px",
+        color: "#FFFFFF",
+      }).setOrigin(0, 0);
 
-      const tt = this.add
-        .text(this._colTimeX, y, t, {
-          fontFamily: "Arial",
-          fontSize: "15px",
-          color: "#FFFFFF",
-        })
-        .setOrigin(1, 0);
+      const tn = this.add.text(this._colNameX, y, name, {
+        fontFamily: "Arial",
+        fontSize: "15px",
+        color: "#FFFFFF",
+      }).setOrigin(0, 0);
+
+      const tt = this.add.text(this._colTimeX, y, t, {
+        fontFamily: "Arial",
+        fontSize: "15px",
+        color: "#FFFFFF",
+      }).setOrigin(1, 0);
 
       this._rowsContainer.add([tr, tn, tt]);
     });
@@ -259,37 +226,20 @@ class Finish extends Phaser.Scene {
     this._rowsContainer.y = -this._scroll;
   }
 
-  // ---------- SAVE UI (fixed, not scrolling) ----------
+  _showSaveUI(rank) {
+    this._cleanupDom(); // drošībai, ja scene restartējas
 
-  _showSaveUI() {
-    const W = this.scale.width;
-
-    // DOM input enkurots uz canvas bounds
-    this._cleanupDom();
-
-    const rankText = String(this._estimateRank());
-    // mazs rank “chip”
-    this._rankChip = this.add
-      .text(this._tableX + 4, this._saveRowY, rankText, {
-        fontFamily: "Arial",
-        fontSize: "16px",
-        color: "#FFFFFF",
-        backgroundColor: "rgba(255,255,255,0.10)",
-        padding: { left: 8, right: 8, top: 6, bottom: 6 },
-      })
-      .setOrigin(0, 0.5);
-
-    // Phaser poga “Saglabāt” (vienota ar stilu)
     const btnW = 150;
     const btnH = 40;
 
-    // input platums: garāks un vairāk pa kreisi
-    const inputX = this._tableX + 60;
-    const inputW = this._tableW - 60 - btnW - 10;
+    const rowY = 165;
+    const inputX = this._tableX + 10;
+    const inputW = this._tableW - btnW - 20;
 
+    // Save button (Phaser)
     this._saveBtn = this._button(
       this._tableX + this._tableW - btnW / 2,
-      this._saveRowY,
+      rowY,
       btnW,
       btnH,
       "Saglabāt",
@@ -298,7 +248,7 @@ class Finish extends Phaser.Scene {
     );
     this._saveBtn.container.setDepth(5000);
 
-    // izveidojam DOM input
+    // DOM input anchored to canvas bounds
     const dom = document.createElement("input");
     dom.type = "text";
     dom.maxLength = 28;
@@ -322,14 +272,12 @@ class Finish extends Phaser.Scene {
     document.body.appendChild(dom);
     this._nameInput = dom;
 
-    // pozicionēšana pret canvas bounding box
     const layout = () => {
       if (!this._nameInput) return;
       const canvas = this.game.canvas;
       const r = canvas.getBoundingClientRect();
-
       const px = r.left + (inputX / this.scale.width) * r.width;
-      const py = r.top + (this._saveRowY / this.scale.height) * r.height;
+      const py = r.top + (rowY / this.scale.height) * r.height;
       const pw = (inputW / this.scale.width) * r.width;
 
       this._nameInput.style.left = `${Math.round(px)}px`;
@@ -339,13 +287,10 @@ class Finish extends Phaser.Scene {
 
     this._layoutDom = layout;
     layout();
-
-    // uz resize/orientation — pārliekam vietā, bet NEkādas scene pārejas
     this.scale.on("resize", layout);
 
-    // Enter -> save
     this._onKeyDown = (ev) => {
-      if (!this._nameInput || this._saved) return;
+      if (this._saved) return;
       if (ev.key === "Enter") {
         ev.preventDefault();
         this._submitScore();
@@ -353,10 +298,9 @@ class Finish extends Phaser.Scene {
     };
     window.addEventListener("keydown", this._onKeyDown);
 
-    // uzreiz fokusē (mobilajā atvērs klaviatūru tikai pēc user action; tas ir normāli)
     setTimeout(() => {
       try { this._nameInput && this._nameInput.focus(); } catch (e) {}
-    }, 50);
+    }, 60);
   }
 
   _submitScore() {
@@ -369,13 +313,6 @@ class Finish extends Phaser.Scene {
       return;
     }
 
-    const timeSec = Number(this.result.timeSeconds || this.result.timeSec);
-    if (!Number.isFinite(timeSec) || timeSec <= 0) {
-      this._msg.setText("Slikts laiks.");
-      return;
-    }
-
-    // bloķējam UI uzreiz (lai nevar spiest 2x)
     this._saved = true;
     this._saveBtn.setEnabled(false);
     this._saveBtn.setLabel("Saglabā...");
@@ -384,7 +321,7 @@ class Finish extends Phaser.Scene {
       `${this.API_URL}?action=submit` +
       `&token=${encodeURIComponent(this.TOKEN)}` +
       `&name=${encodeURIComponent(name)}` +
-      `&time=${encodeURIComponent(timeSec)}`;
+      `&time=${encodeURIComponent(this.timeSec)}`;
 
     this._jsonp(url, "cb_submit_", (res) => {
       if (!res || res.ok !== true) {
@@ -395,14 +332,13 @@ class Finish extends Phaser.Scene {
         return;
       }
 
-      // veiksmīgi: izņemam input un aizslēdzam pogu
       this._saveBtn.setLabel("Saglabāts ✓");
       this._saveBtn.setEnabled(false);
       this._msg.setText("Saglabāts.");
 
-      this._cleanupDom(); // <- vairs nav aktīva ievade
+      this._cleanupDom(); // <- pēc saglabāšanas ievade pazūd un vairs nav aktīva
 
-      // pārlādējam TOP, lai sevi redzi
+      // Pārlādē top, lai redzi sevi
       this._jsonp(`${this.API_URL}?action=top`, "cb_top2_", (data) => {
         if (Array.isArray(data)) {
           this._top = data;
@@ -418,59 +354,35 @@ class Finish extends Phaser.Scene {
   }
 
   _cleanupDom() {
-    // noņem resize listeneri
     if (this._layoutDom) {
       try { this.scale.off("resize", this._layoutDom); } catch (e) {}
       this._layoutDom = null;
     }
-    // noņem keydown
     if (this._onKeyDown) {
       window.removeEventListener("keydown", this._onKeyDown);
       this._onKeyDown = null;
     }
-    // noņem input elementu
     if (this._nameInput) {
       try { this._nameInput.blur(); } catch (e) {}
       try { this._nameInput.disabled = true; } catch (e) {}
       try { this._nameInput.remove(); } catch (e) {}
       this._nameInput = null;
     }
-    // noņem rank chip (ja vajag)
-    if (this._rankChip) {
-      this._rankChip.destroy();
-      this._rankChip = null;
-    }
   }
-
-  shutdown() {
-    this._cleanupDom();
-  }
-
-  // ---------- helpers ----------
 
   _isEligibleForSave() {
-    // TOP50 gadījumā: ja top nav ielādēts, nevar
-    if (!Array.isArray(this._top)) return false;
-
-    const myTime = Number(this.result.timeSeconds || this.result.timeSec);
-    if (!Number.isFinite(myTime) || myTime <= 0) return false;
-
-    // ja top < 50 -> kvalificējas automātiski
-    if (this._top.length < 50) return true;
-
-    const last = this._top[this._top.length - 1];
-    return myTime <= Number(last.time);
+    const rows = this._top || [];
+    if (rows.length < 50) return true;
+    const last = rows[rows.length - 1];
+    return this.timeSec <= Number(last.time);
   }
 
   _estimateRank() {
-    // aptuveni pareizi: atrod pirmo vietu, kur myTime būtu ieliekams
-    const myTime = Number(this.result.timeSeconds || this.result.timeSec);
-    if (!Array.isArray(this._top) || !Number.isFinite(myTime)) return 50;
-
-    for (let i = 0; i < this._top.length; i++) {
-      if (myTime <= Number(this._top[i].time)) return i + 1;
+    const rows = this._top || [];
+    for (let i = 0; i < rows.length; i++) {
+      if (this.timeSec <= Number(rows[i].time)) return i + 1;
     }
-    return Math.min(50, this._top.length + 1);
+    return Math.min(50, rows.length + 1);
   }
 
   _formatTime(sec) {
@@ -519,13 +431,11 @@ class Finish extends Phaser.Scene {
     const container = this.add.container(x, y);
 
     const bg = this.add.rectangle(0, 0, w, h, color, 1).setOrigin(0.5);
-    const txt = this.add
-      .text(0, 0, label, {
-        fontFamily: "Arial",
-        fontSize: "20px",
-        color: "#FFFFFF",
-      })
-      .setOrigin(0.5);
+    const txt = this.add.text(0, 0, label, {
+      fontFamily: "Arial",
+      fontSize: "20px",
+      color: "#FFFFFF",
+    }).setOrigin(0.5);
 
     container.add([bg, txt]);
     container.setSize(w, h);
@@ -553,10 +463,7 @@ class Finish extends Phaser.Scene {
       setLabel: (t) => txt.setText(t),
     };
 
-    container.on("pointerdown", () => {
-      if (onClick) onClick();
-    });
-
+    container.on("pointerdown", () => onClick && onClick());
     return api;
   }
 }
