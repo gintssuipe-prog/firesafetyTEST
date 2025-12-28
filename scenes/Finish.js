@@ -22,6 +22,11 @@ class Finish extends Phaser.Scene {
     this._nameInput = null;
     this._nameInputEnabled = false;
 
+    // Mobile keyboard resize lock (prevent canvas/layout shrink while typing)
+    this._keyboardLock = false;
+    this._lastScaleW = null;
+    this._lastScaleH = null;
+
     // computed layout rects (game coords)
     this._entryRect = null;
     this._headerRect = null;
@@ -106,16 +111,9 @@ class Finish extends Phaser.Scene {
     this._maskGfx.setVisible(false);
 
     // buttons
-    this._btnRestart = this.makeBigButton(0, 0, 'RESTART', 0x1f4a2c, 0x2a6a3b);
     this._btnExit = this.makeBigButton(0, 0, 'IZIET', 0x5a1e1e, 0x7a2a2a);
     this._btnSave = this.makeSmallButton(0, 0, 'Saglabāt', 0x1f3a52, 0x2a587c);
     this._btnSave.setEnabled(false);
-
-    this._btnRestart.onClick(() => {
-      this.disableNameInput();
-      this.scene.start('MainMenu');
-    });
-
     this._btnExit.onClick(() => {
       this.disableNameInput();
       try { window.open('', '_self'); window.close(); } catch (e) {}
@@ -154,18 +152,54 @@ class Finish extends Phaser.Scene {
 
     // resize
     this.scale.on('resize', () => {
+      const newW = this.scale.width;
+      const newH = this.scale.height;
+
+      // On some Android browsers the on-screen keyboard triggers a height-only resize.
+      // We keep the layout stable while the name input is focused.
+      if (this._keyboardLock && this._lastScaleW === newW && this._lastScaleH !== null && this._lastScaleH !== newH) {
+        // still update input position in case the browser moved the visual viewport
+        this.updateNameInputPosition();
+        return;
+      }
+
+      this._lastScaleW = newW;
+      this._lastScaleH = newH;
+
       fitCover();
       this.layout();
       this.updateNameInputPosition();
     });
 
+
+    // visualViewport (mobile keyboard / address bar) adjustments
+    // Some browsers trigger visualViewport resize/scroll instead of (or in addition to) Scale resize.
+    // We never relayout while the name input is focused; we only keep the DOM input pinned.
+    this._vvHandler = null;
+    if (window.visualViewport) {
+      this._vvHandler = () => {
+        // Keep input aligned with the current visual viewport.
+        this.updateNameInputPosition();
+      };
+      window.visualViewport.addEventListener('resize', this._vvHandler);
+      window.visualViewport.addEventListener('scroll', this._vvHandler);
+    }
+
     this.events.once('shutdown', () => {
       this.disableNameInput();
+      if (this._vvHandler && window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', this._vvHandler);
+        window.visualViewport.removeEventListener('scroll', this._vvHandler);
+        this._vvHandler = null;
+      }
+
       this.scale.off('resize');
     });
 
     // initial layout + load
     this.layout();
+    this._lastScaleW = this.scale.width;
+    this._lastScaleH = this.scale.height;
     this.loadTop();
   }
 
@@ -175,16 +209,9 @@ class Finish extends Phaser.Scene {
 
     this._title.setPosition(W / 2, 72);
     this._sub.setPosition(W / 2, 110);
-    this._status.setPosition(W / 2, 142);
-
-    // bottom buttons
+    this._status.setPosition(W / 2, 142);  // bottom button
     const btnY = H - 64;
-    const gap = 26;
-    const totalW = 200 * 2 + gap;
-    const leftX = Math.round(W / 2 - totalW / 2 + 100);
-    const rightX = leftX + 200 + gap;
-    this._btnRestart.setPosition(leftX, btnY);
-    this._btnExit.setPosition(rightX, btnY);
+    this._btnExit.setPosition(Math.round(W / 2), btnY);
 
     // panel area
     const panelW = Math.min(380, Math.max(300, W - 40));
@@ -220,26 +247,66 @@ class Finish extends Phaser.Scene {
     this.applyScroll();
   }
 
+  
   async loadTop() {
-    try {
-      const top = await this.jsonp(`${this.API_URL}?action=top`);
-      if (!Array.isArray(top)) throw new Error('bad response');
-      // filter out invalid rows (e.g. 00:00 / empty) to avoid rank shift
-      const clean = top.filter(r => {
-        const t = Number(r && r.time);
-        const name = (r && r.name != null) ? String(r.name).trim() : '';
-        return Number.isFinite(t) && t > 0 && name.length > 0;
-      }).map((r, i) => ({ ...r, rank: i + 1 }));
-      this._top = clean;
-      this._status.setText('');
-      this.buildTable();
-    } catch (e) {
-      this._status.setText('Neizdevās ielādēt TOP (pārbaudi deploy).');
-      this._status.setColor('#ffcccc');
-      this._top = [];
-      this.buildTable();
+    // Status: loading
+    this._status.setColor('#ffffff');
+    this._status.setText('Ielādē datus...');
+
+    const base = `https://script.google.com/macros/s/AKfycbyh6BcVY_CBPW9v7SNo1bNp_XttvhxpeSdYPfrTdRCD4KWXLeLvv-0S3p96PX0Dv5BnrA/exec?action=top&token=${encodeURIComponent(this.TOKEN)}`;
+    const attemptUrls = [
+      base,
+      base + `&_=${Date.now()}`
+    ];
+
+    let lastErr = null;
+
+    for (let i = 0; i < attemptUrls.length; i++) {
+      const url = attemptUrls[i];
+      try {
+        const top = await this.jsonp(url, 4500);
+        if (!Array.isArray(top)) {
+          const err = new Error('invalid');
+          err.code = 'invalid';
+          throw err;
+        }
+
+        // filter out invalid rows (e.g. 00:00 / empty) to avoid rank shift
+        const clean = top.filter(r => {
+          const t = Number(r && r.time);
+          const name = (r && r.name != null) ? String(r.name).trim() : '';
+          return Number.isFinite(t) && t > 0 && name.length > 0;
+        }).map((r, idx) => ({ ...r, rank: idx + 1 }));
+
+        this._top = clean;
+        this._status.setText('');
+        this._status.setColor('#ffffff');
+        this.buildTable();
+        return;
+      } catch (e) {
+        lastErr = e;
+        // if first attempt fails, try once more (cache/proxy)
+      }
+    }
+
+    // Failed after attempts -> show detailed status
+    const code = (lastErr && lastErr.code) ? lastErr.code : 'invalid';
+
+    this._top = [];
+    this.buildTable();
+
+    if (code === 'timeout') {
+      this._status.setColor('#ffdddd');
+      this._status.setText('Datu ielāde nokavēta...\nRezultātu ielāde aizkavējās vai tika bloķēta.');
+    } else if (code === 'blocked') {
+      this._status.setColor('#ffdddd');
+      this._status.setText('Datu ielāde bloķēta\nPārlūks neļāva ielādēt rezultātus.');
+    } else {
+      this._status.setColor('#ffdddd');
+      this._status.setText('Datu ielāde neizdevās\nServera atbilde bija nederīga.');
     }
   }
+
 
   buildTable() {
     // clear previous table ui
@@ -391,15 +458,45 @@ class Finish extends Phaser.Scene {
     input.style.boxSizing = 'border-box';
     input.style.pointerEvents = 'auto';
 
+    // Name constraints
+    input.maxLength = 20;
+    input.setAttribute('maxlength', '20');
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('autocorrect', 'off');
+    input.setAttribute('autocapitalize', 'none');
+    input.setAttribute('spellcheck', 'false');
+
     document.body.appendChild(input);
     this._nameInput = input;
 
     // Keep save button enabled state sensible
     input.addEventListener('input', this._onNameInput = () => {
       if (this._saved) return;
-      const ok = input.value.trim().length > 0;
+
+      // Enforce: max 20 symbols, no spaces
+      const before = input.value;
+      let v = before.replace(/\s+/g, '');
+      if (v.length > 20) v = v.slice(0, 20);
+      if (v !== before) input.value = v;
+
+      const ok = v.length > 0;
       this._btnSave.setEnabled(ok);
     });
+    // Keyboard focus: prevent layout resize jump on some Android browsers
+    input.addEventListener('focus', () => {
+      this._keyboardLock = true;
+      this._lastScaleW = this.scale.width;
+      this._lastScaleH = this.scale.height;
+    });
+    input.addEventListener('blur', () => {
+      this._keyboardLock = false;
+      this._lastScaleW = this.scale.width;
+      this._lastScaleH = this.scale.height;
+      // Re-layout once after keyboard closes
+      this.layout();
+      this.updateNameInputPosition();
+    });
+
 
     // Initial enable state
     this._btnSave.setEnabled(false);
@@ -521,28 +618,49 @@ class Finish extends Phaser.Scene {
     }
   }
 
-  jsonp(url) {
+  jsonp(url, timeoutMs = 4500) {
     return new Promise((resolve, reject) => {
       const cbName = 'cb_' + Math.random().toString(16).slice(2);
+      let settled = false;
+
       const cleanup = (script) => {
         try { delete window[cbName]; } catch (e) {}
-        try { script.remove(); } catch (e) {}
+        try { script && script.remove && script.remove(); } catch (e) {}
       };
 
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup(script);
+        const err = new Error('timeout');
+        err.code = 'timeout';
+        reject(err);
+      }, timeoutMs);
+
       window[cbName] = (data) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         cleanup(script);
         resolve(data);
       };
 
       const script = document.createElement('script');
       script.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         cleanup(script);
-        reject(new Error('load error'));
+        const err = new Error('blocked');
+        err.code = 'blocked';
+        reject(err);
       };
+
       script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cbName;
       document.body.appendChild(script);
     });
   }
+
 
   formatTime(sec) {
     if (!Number.isFinite(sec) || sec == null) return '--:--';
