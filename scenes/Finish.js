@@ -171,28 +171,8 @@ class Finish extends Phaser.Scene {
       this.updateNameInputPosition();
     });
 
-
-    // visualViewport (mobile keyboard / address bar) adjustments
-    // Some browsers trigger visualViewport resize/scroll instead of (or in addition to) Scale resize.
-    // We never relayout while the name input is focused; we only keep the DOM input pinned.
-    this._vvHandler = null;
-    if (window.visualViewport) {
-      this._vvHandler = () => {
-        // Keep input aligned with the current visual viewport.
-        this.updateNameInputPosition();
-      };
-      window.visualViewport.addEventListener('resize', this._vvHandler);
-      window.visualViewport.addEventListener('scroll', this._vvHandler);
-    }
-
     this.events.once('shutdown', () => {
       this.disableNameInput();
-      if (this._vvHandler && window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', this._vvHandler);
-        window.visualViewport.removeEventListener('scroll', this._vvHandler);
-        this._vvHandler = null;
-      }
-
       this.scale.off('resize');
     });
 

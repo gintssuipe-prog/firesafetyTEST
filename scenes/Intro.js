@@ -39,6 +39,16 @@ class Intro extends Phaser.Scene {
       .setOrigin(1, 0)
       .setAlpha(0.9);
 
+
+    const versionLabel = this.add
+      .text(12, 10, (window.GAME_VERSION || "v?"), {
+        fontFamily: "Arial",
+        fontSize: "14px",
+        color: "#ffffff"
+      })
+      .setOrigin(0, 0)
+      .setAlpha(0.9);
+
     const hint = this.add
       .text(0, 0, "Spied START vai ENTER", {
         fontFamily: "Arial",
@@ -129,6 +139,7 @@ class Intro extends Phaser.Scene {
       grad.fillRect(0, H - gradH, W, gradH);
 
       copyright.setPosition(W - 12, 10);
+      versionLabel.setPosition(12, 10);
 
       const hintY = H - (isDesktop ? 165 : 150);
       const btnY = hintY + 75;
