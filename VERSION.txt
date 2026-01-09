@@ -1,2 +1,2 @@
-FireSafetyGame version 2.1
-Build (UTC): 2026-01-09T23:12:01Z
+FireSafetyGame v2.1
+Build: 2026-01-09 23:37 UTC
